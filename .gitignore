@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# React
+node_modules/
+dist/
+
+# Environment and secrets
+.env
+.env.*
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# MLflow generated logs
+mlruns/
+
+# Temporary files
+*.log
+test_out.txt
+
+# DVC temporary files
+.dvc/tmp/
+.dvc/cache/
+# Large trained model files
+*.safetensors

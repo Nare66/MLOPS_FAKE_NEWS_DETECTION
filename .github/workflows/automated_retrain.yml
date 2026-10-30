@@ -1,0 +1,123 @@
+name: Automated Retraining & Model Registry (Continuous Learning)
+
+on:
+  push:
+    paths:
+      - 'dataset/raw/**'
+      - 'params.yaml'
+  workflow_dispatch:
+    inputs:
+      epochs:
+        description: 'Number of training epochs'
+        required: false
+        default: '3'
+      force_promote:
+        description: 'Force promote regardless of regression check'
+        required: false
+        default: 'false'
+
+jobs:
+  continuous-retrain-pipeline:
+    name: Retrain BERT & Evaluate Gating Criteria
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install MLOps Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Validate New Labelled Data
+        run: |
+          python -c "
+          import pandas as pd
+          from ml.data_processor import normalize_label
+          df = pd.read_csv('dataset/raw/news_dataset.csv')
+          assert 'label' in df.columns, 'Missing label column'
+          print(f'Total records in raw pool: {len(df)}')
+          "
+
+      - name: Update DVC Manifest
+        env:
+          DVC_NO_ANALYTICS: "1"
+        run: |
+          dvc status || true
+          dvc add dataset/raw/news_dataset.csv
+
+      - name: Run Data Preprocessor Stage
+        run: |
+          python -m ml.dvc_stages.prepare
+
+      - name: Fine-Tune Candidate BERT Model
+        run: |
+          python -c "
+          from ml.train import train_bert_model
+          import time
+          v = f'v1.{int(time.time()) % 10000}.0'
+          epochs = int('${{ github.event.inputs.epochs || '3' }}')
+          res = train_bert_model(
+              train_csv='dataset/processed/train.csv',
+              val_csv='dataset/processed/val.csv',
+              output_dir='models/candidate/model',
+              epochs=epochs,
+              model_version=v
+          )
+          print('Candidate training finished:', res['metrics'])
+          "
+
+      - name: Evaluate Candidate Against Test Dataset
+        run: |
+          python -m ml.dvc_stages.evaluate_stage
+
+      - name: Apply Promotion Gate Protocol
+        run: |
+          python -c "
+          import json, os, shutil, sys
+
+          with open('models/production/metrics.json') as f:
+              prod_metrics = json.load(f)
+          with open('models/candidate/eval/metrics.json') as f:
+              cand_metrics = json.load(f)
+
+          prod_acc = prod_metrics.get('accuracy', 0.75)
+          cand_acc = cand_metrics.get('accuracy', 0.0)
+          cand_f1 = cand_metrics.get('f1', 0.0)
+          force = '${{ github.event.inputs.force_promote }}' == 'true'
+
+          print(f'Production Accuracy: {prod_acc} | Candidate Accuracy: {cand_acc} | Candidate F1: {cand_f1}')
+
+          # Threshold: candidate must not regress by > 0.02 and must be >= 0.75
+          if (cand_acc >= prod_acc - 0.02 and cand_acc >= 0.75 and cand_f1 >= 0.75) or force:
+              print('PROMOTION APPROVED: Copying candidate to production...')
+              src_dir = 'models/candidate/model'
+              dst_dir = 'models/production'
+              for f in os.listdir(src_dir):
+                  shutil.copy2(os.path.join(src_dir, f), os.path.join(dst_dir, f))
+              shutil.copy2('models/candidate/eval/metrics.json', os.path.join(dst_dir, 'metrics.json'))
+              print('Model promoted successfully to Production.')
+          else:
+              print('PROMOTION REJECTED: Candidate did not satisfy performance criteria. Retaining existing production model.')
+          "
+
+      - name: Run Evidently AI Data Drift Analysis
+        run: |
+          python -m ml.drift_monitor
+
+      - name: Commit & Push Model Lineage (If Approved)
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Action CI/CD"
+          git add dataset/raw/news_dataset.csv.dvc models/production/metrics.json models/production/metadata.json monitoring/reports/ || true
+          git diff --staged --quiet || git commit -m "Automated Retraining: Updated model version & DVC dataset tracking [skip ci]"
+          git push || true

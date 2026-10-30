@@ -1,0 +1,26 @@
+model:
+  base_model: "distilbert-base-uncased" # Fast, high-accuracy BERT variant
+  num_labels: 2
+  max_seq_length: 128
+  dropout: 0.2
+
+training:
+  batch_size: 8
+  epochs: 3
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  random_seed: 42
+  eval_steps: 10
+  logging_steps: 5
+
+data:
+  raw_path: "dataset/raw/news_dataset.csv"
+  train_split: 0.70
+  val_split: 0.15
+  test_split: 0.15
+
+evaluation:
+  min_accuracy_threshold: 0.75
+  min_f1_threshold: 0.75
+  max_accuracy_regression: 0.02

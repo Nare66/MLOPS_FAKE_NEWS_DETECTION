@@ -1,0 +1,108 @@
+name: CI/CD Pipeline - Fake News BERT & MLOps
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  backend-quality-and-tests:
+    name: Backend Tests & Data Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Backend Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest httpx
+
+      - name: Validate Dataset Hygiene & Splits
+        run: |
+          python -m ml.data_processor
+
+      - name: Run Backend Integration & Model Tests
+        run: |
+          pytest backend/tests/test_api.py -v --junitxml=test-reports/junit.xml
+
+      - name: Run Production Model Evaluation Protocol
+        run: |
+          python -c "
+          import json, os, sys
+          metrics_file = 'models/production/metrics.json'
+          if not os.path.exists(metrics_file):
+              print('Warning: Production metrics file not found.')
+              sys.exit(0)
+          with open(metrics_file) as f:
+              data = json.load(f)
+          acc = data.get('accuracy', 0)
+          f1 = data.get('f1', 0)
+          print(f'Production Model Check -> Accuracy: {acc}, F1: {f1}')
+          assert acc >= 0.70, f'Accuracy {acc} is below required CI threshold 0.70'
+          assert f1 >= 0.70, f'F1 Score {f1} is below required CI threshold 0.70'
+          print('Evaluation verification PASSED.')
+          "
+
+  frontend-build:
+    name: Frontend Build & Asset Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package.json
+
+      - name: Install Frontend Dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Build Vite Production Assets
+        working-directory: ./frontend
+        run: npm run build
+
+  deploy-container:
+    name: Build & Deploy Container Images
+    needs: [backend-quality-and-tests, frontend-build]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub (Conditional)
+        if: "${{ env.DOCKER_USER != '' }}"
+        env:
+          DOCKER_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Tag Backend Container
+        run: |
+          docker build -t fake-news-backend:latest -f backend/Dockerfile .
+
+      - name: Build and Tag Frontend Container
+        run: |
+          docker build -t fake-news-frontend:latest -f frontend/Dockerfile ./frontend

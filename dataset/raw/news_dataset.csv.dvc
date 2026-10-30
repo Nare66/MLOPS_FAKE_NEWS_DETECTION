@@ -1,0 +1,5 @@
+outs:
+- md5: 21e7d0eb8b0a3d6a9b12da72dfa49cf2
+  size: 20741
+  hash: md5
+  path: news_dataset.csv

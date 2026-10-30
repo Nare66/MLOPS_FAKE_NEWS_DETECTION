@@ -1,0 +1,48 @@
+stages:
+  prepare:
+    cmd: python ml/dvc_stages/prepare.py
+    deps:
+      - dataset/raw/news_dataset.csv
+      - ml/dvc_stages/prepare.py
+      - ml/data_processor.py
+    params:
+      - data.train_split
+      - data.val_split
+      - data.test_split
+      - training.random_seed
+    outs:
+      - dataset/processed/train.csv
+      - dataset/processed/val.csv
+      - dataset/processed/test.csv
+      - dataset/reference/reference_data.csv
+
+  train:
+    cmd: python ml/dvc_stages/train_stage.py
+    deps:
+      - dataset/processed/train.csv
+      - dataset/processed/val.csv
+      - ml/dvc_stages/train_stage.py
+      - ml/train.py
+    params:
+      - model.base_model
+      - model.max_seq_length
+      - training.batch_size
+      - training.epochs
+      - training.learning_rate
+      - training.random_seed
+    outs:
+      - models/candidate/model
+
+  evaluate:
+    cmd: python ml/dvc_stages/evaluate_stage.py
+    deps:
+      - dataset/processed/test.csv
+      - models/candidate/model
+      - ml/dvc_stages/evaluate_stage.py
+      - ml/evaluate.py
+    params:
+      - evaluation.min_accuracy_threshold
+      - evaluation.min_f1_threshold
+    metrics:
+      - models/candidate/eval/metrics.json:
+          cache: false

@@ -1,0 +1,7 @@
+.git
+.hg
+.svn
+*.pyc
+__pycache__
+node_modules
+.venv
